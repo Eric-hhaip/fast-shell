@@ -1,302 +1,335 @@
 # Fast Shell
 
-> 面向 macOS 的轻量远程运维工作台 —— 一个窗口里完成 **SSH 终端 + SFTP 文件管理 + 服务器监控**。
+**English** | [简体中文](README.zh-CN.md)
+
+> A lightweight remote-ops workbench for macOS — **SSH terminal + SFTP file manager + server monitoring** in a single window.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)]()
 [![Flutter](https://img.shields.io/badge/Flutter-3.47-02569B.svg)](https://flutter.dev)
 
-技术栈：Flutter 3.47（macOS Desktop）· dartssh2（SSH / SFTP）· xterm.dart（终端渲染）· cryptography（AES-256-GCM 本地加密）
+Built with Flutter 3.47 (macOS desktop) · dartssh2 (SSH / SFTP) · xterm.dart (terminal rendering) · cryptography (AES-256-GCM local encryption)
 
 ---
 
-## 下载安装
+## Download
 
-到 [版本发布页](https://cnb.cool/hhaip.com/opensource/fast-shell/-/releases) 下载最新版的
-`Fast-Shell-<版本>-macos.zip`，解压后把 `Fast Shell.app` 拖进「应用程序」。
+Grab the latest `Fast-Shell-<version>-macos.zip` from
+[Releases](https://github.com/Eric-hhaip/fast-shell/releases) (mirror:
+[CNB](https://cnb.cool/hhaip.com/opensource/fast-shell/-/releases)), unzip it, and drag `Fast Shell.app`
+into your Applications folder.
 
-首次打开若被 Gatekeeper 拦下（本地自签名、未经过 Apple 公证）：
+If Gatekeeper blocks the first launch (the build is self-signed and not notarized by Apple):
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/Fast Shell.app"
 ```
 
-> 系统要求 macOS 12+，Apple Silicon / Intel 均可。
+> Requires macOS 12+ on Apple Silicon or Intel.
 
 ---
 
-## 截图
+## Screenshots
 
-**主界面** —— 终端、SFTP 文件、服务器监控三栏并排，一个窗口完成日常运维：
+**Main window** — terminal, SFTP browser and server monitoring side by side, so daily ops happen in one window:
 
-![主界面：SSH 终端 + SFTP 文件 + 服务器监控](docs/screenshots/main-window.png)
+![Main window: SSH terminal + SFTP + server monitoring](docs/screenshots/main-window.png)
 
-**新建连接**：
+**New connection**:
 
-![新建连接](docs/screenshots/connection-editor.png)
-
----
-
-## 为什么做这个
-
-日常运维往往要在「终端工具 + 文件传输工具 + 一个 ssh 进去敲 `top` 的窗口」之间来回切。
-Fast Shell 把这些合到一个原生 macOS 窗口里：连上主机，终端在左、文件在右、监控一键展开，
-连接信息全部本地加密保存，不经过任何服务器。
+![New connection dialog](docs/screenshots/connection-editor.png)
 
 ---
 
-## 功能
+## Why this exists
 
-### 1. 连接管理
-- 连接增删改：名称、分类、主机、端口、用户名、备注
-- 认证方式：密码 / 私钥（可选私钥文件，或直接粘贴私钥内容，支持私钥密码短语）
-- **主机指纹校验**：首次连接弹窗核对 SHA256 指纹，信任后写入本地；指纹变化时红色告警，防中间人攻击
-- 分类管理：内置「默认」不可删，其余分类可新增 / 删除，删除后其下连接自动归入「默认」
-- 分类折叠、关键字搜索、右键菜单（打开 / 编辑 / 创建副本 / 复制 `ssh` 命令 / 清除主机指纹 / 删除）
-- 快速连接：搜索框或 `⌘T` 输入 `user@host:port` 直接开临时会话
-- 最近连接：欢迎页一键回到常用主机
-
-### 2. 终端
-- 多标签并行会话，标签显示连接名与实时连接状态
-- 256 色 / 真彩色渲染，回滚缓冲 10000 行，窗口尺寸变化自动下发 `pty-req`
-- 功能键条：`Esc` / `Tab` / `Ctrl+C` / `Ctrl+D` / 方向键
-- 断线提示与一键重连，字号实时调整
-- **日志不截断**：终端采用字符网格渲染（xterm），只绘制可见区域，任意长度的滚动输出都不会拖垮界面
-
-### 3. 服务器监控（`⌘⇧M`）
-- 主机概览：主机名 / 内核 / 发行版 / 运行时长 / 负载
-- CPU 总占用与单核曲线、内存与 Swap、磁盘挂载点用量条、网络上下行实时速率
-- CPU 占用 Top 进程列表（PID / 用户 / 命令 / 占用）
-- **Docker 容器管理**：列表（名称 / 镜像 / 状态 / 内存 / 网络 IO），支持启动 / 停止 / 重启 / 删除 / 查看日志
-- 容器日志全屏查看，可跟随滚动，同样不做截断
-- 连接建立后**后台预取首份数据**，点开面板即刻出数，不用再等冷启动那十几秒
-- 应用切到后台自动暂停轮询，回到前台恢复，不空耗 CPU
-
-### 4. SFTP 文件传输（`⌘⇧F`）
-- **目录树**：左侧可视化整棵系统目录（懒加载展开、点击跳转、当前目录高亮，可折叠）
-- **文件内容查看 / 编辑**：点击文件直接显示内容（UTF-8，上限 1MB 给出截断提示、二进制识别告警），
-  可在线编辑并保存回远端，未保存离开有二次确认
-- 目录浏览：面包屑路径、上一级、主目录、点文件显示开关
-- 上传：多选文件 / 整个文件夹 / **直接拖拽到面板**，也可在目录右键「上传文件到此处」
-- 下载：默认直接存到 `~/Downloads`（沙盒下唯一有明确写权限的位置，少一次面板交互）；
-  右键也可选「下载到…（选择位置）」，该位置会先做一次真实写入探测，不可写则自动回退到 `~/Downloads` 并提示
-- 下载采用「临时文件 + 原子改名」：中途失败或取消不会留下半截文件，也不会破坏本地同名文件
-- 右键菜单：查看内容 / 编辑文件 / 下载到 `~/Downloads` / 下载到… / 重命名 / 新建文件夹 / 复制路径 / 删除（目录递归删除）
-- 传输队列：进度条、实时速度、并行 2 个任务、可取消（取消后自动清理半截文件）、失败原因展示
-- 传输记录**不会自动消失**：每行可手动清除记录；失败行保留并显示红色错误原因，成功行可一键「在访达中显示」
-- 终端流式 UTF-8 解码：汉字 / 符号不会因 TCP 分块被切断而乱码
-
-### 5. 安全与隐私
-- 连接信息（含密码、私钥）整体 **AES-256-GCM** 加密落盘
-- 加密密钥由「随机主密钥文件（权限 600）+ 本机硬件 UUID」经 HKDF 派生 → 配置文件拷到别的电脑无法解密
-- 所有数据纯本地，不经任何网络上传，无遥测、无账号体系
+Day-to-day ops usually means bouncing between a terminal app, a file transfer app, and a third window
+where you SSH in just to run `top`. Fast Shell folds all three into one native macOS window: connect to a
+host and you get the terminal on the left, files in the middle, and monitoring one click away. All
+connection details are encrypted locally and never leave your machine.
 
 ---
 
-## 快捷键
+## Features
 
-| 快捷键 | 作用 |
+### 1. Connection management
+- Create, edit and delete connections: name, category, host, port, username, notes
+- Authentication: password or private key (pick a key file, or paste the key contents; passphrase supported)
+- **Host key verification**: the SHA256 fingerprint is shown on first connect and stored once you trust it;
+  any later change raises a red warning, guarding against man-in-the-middle attacks
+- Category management: the built-in "Default" cannot be deleted; other categories can be added or removed,
+  and connections inside a deleted category fall back to "Default"
+- Collapsible categories, keyword search, right-click menu (open / edit / duplicate / copy `ssh` command /
+  clear host key / delete)
+- Quick connect: type `user@host:port` in the search box or hit `⌘T` to open a throwaway session
+- Recent connections: jump back to frequently used hosts from the welcome screen
+
+### 2. Terminal
+- Multiple concurrent sessions in tabs, each tab showing the connection name and live status
+- 256-colour / true-colour rendering, 10,000 lines of scrollback, automatic `pty-req` on resize
+- Function key bar: `Esc` / `Tab` / `Ctrl+C` / `Ctrl+D` / arrow keys
+- Disconnect notice with one-click reconnect, live font size adjustment
+- **Logs are never truncated**: the terminal renders a character grid (xterm) and only paints the visible
+  region, so arbitrarily long output never drags the UI down
+
+### 3. Server monitoring (`⌘⇧M`)
+- Host overview: hostname / kernel / distro / uptime / load
+- CPU total and per-core curves, memory and swap, disk usage bars per mount point, live network throughput
+- Top processes by CPU (PID / user / command / usage)
+- **Docker container management**: list (name / image / state / memory / network I/O) with start, stop,
+  restart, delete and log viewing
+- Full-screen container logs with follow-scroll — also never truncated
+- **Prefetches the first sample in the background** right after connecting, so opening the panel shows data
+  immediately instead of waiting out a cold start
+- Polling pauses automatically when the app goes to the background and resumes on return, so it never burns
+  CPU behind your back
+
+### 4. SFTP file transfer (`⌘⇧F`)
+- **Directory tree**: the whole filesystem as a lazily expanded tree on the left (click to jump, current
+  directory highlighted, collapsible)
+- **View / edit file contents**: click a file to see it (UTF-8, 1 MB limit with an explicit truncation
+  notice, binary files flagged). Edits can be saved back to the remote host, with a confirmation prompt if
+  you leave unsaved changes
+- Directory browsing: breadcrumb path, parent directory, home directory, toggle for dotfiles
+- Upload: multi-select files, whole folders, or **drag and drop onto the panel**; right-click a directory to
+  "upload file here" as well
+- Download: files land in `~/Downloads` by default (the one location the sandbox guarantees write access to,
+  saving a panel round-trip). Right-click offers "Download to…", which probes the chosen directory with a
+  real write before using it and falls back to `~/Downloads` with a notice if it is not writable
+- Downloads use a temp file plus an atomic rename: a cancelled or failed transfer leaves no half-written
+  file and never clobbers an existing file of the same name
+- Right-click menu: view contents / edit file / download to `~/Downloads` / download to… / rename / new
+  folder / copy path / delete (directories deleted recursively)
+- Transfer queue: progress bars, live speed, two parallel tasks, cancellable (a cancel cleans up the partial
+  file), with the failure reason shown
+- Transfer records **never disappear on their own**: clear them per row; failed rows keep their red error
+  message, successful rows offer "Reveal in Finder"
+- Streaming UTF-8 decoding, so multi-byte characters are never mangled by TCP segmentation
+
+### 5. Security and privacy
+- Connection details (including passwords and private keys) are encrypted at rest with **AES-256-GCM**
+- The encryption key is derived via HKDF from a random master key file (mode 600) plus the machine hardware
+  UUID — copying the config to another machine makes it undecryptable
+- Everything stays local. No network uploads, no telemetry, no accounts
+
+---
+
+## Keyboard shortcuts
+
+| Shortcut | Action |
 | --- | --- |
-| `⌘ N` | 新建连接 |
-| `⌘ T` | 快速连接 |
-| `⌘ R` | 重新连接当前会话 |
-| `⌘ ⇧ M` | 打开 / 收起服务器监控 |
-| `⌘ ⇧ F` | 打开 / 收起文件面板 |
-| `⌘ K` | 清空终端显示与回滚缓冲 |
-| `⌘ C` / `⌘ V` | 复制选中文本 / 粘贴到终端 |
-| `⌘ +` / `⌘ -` | 调整终端字号 |
-| `⌘ W` | 关闭当前标签 |
-| `⌘ ,` | 设置 |
+| `⌘ N` | New connection |
+| `⌘ T` | Quick connect |
+| `⌘ R` | Reconnect current session |
+| `⌘ ⇧ M` | Toggle server monitoring |
+| `⌘ ⇧ F` | Toggle file panel |
+| `⌘ K` | Clear terminal display and scrollback |
+| `⌘ C` / `⌘ V` | Copy selection / paste into terminal |
+| `⌘ +` / `⌘ -` | Increase / decrease terminal font size |
+| `⌘ W` | Close current tab |
+| `⌘ ,` | Settings |
 
 ---
 
-## 构建与运行
+## Build and run
 
-### 环境要求
-- macOS 12+（Apple Silicon 或 Intel）
-- Flutter 3.47+（Dart SDK `^3.13.5`）
+### Requirements
+- macOS 12+ (Apple Silicon or Intel)
+- Flutter 3.47+ (Dart SDK `^3.13.5`)
 - Xcode Command Line Tools
 
-### 步骤
+### Steps
 
 ```bash
-git clone https://cnb.cool/hhaip.com/opensource/fast-shell.git
+git clone https://github.com/Eric-hhaip/fast-shell.git
+# or the CNB mirror:
+# git clone https://cnb.cool/hhaip.com/opensource/fast-shell.git
 cd fast-shell
 
 flutter pub get
 
-# 开发运行（热重载）
+# Development run (hot reload)
 flutter run -d macos
 
-# 纯 Dart 逻辑自检（59 项，无需 GUI 环境）
+# Pure-Dart self-check (59 assertions, no GUI required)
 dart run tool/verify.dart
 
-# 静态检查
+# Static analysis
 flutter analyze
 
-# 打包 Release（推荐的发布路径：剥符号 + 产物体检）
+# Release build (the recommended path: strips symbols and inspects the bundle)
 tool/build_release.sh
-# 等价于：
+# equivalent to:
 # flutter build macos --release --split-debug-info=build/symbols
-# 产物：build/macos/Build/Products/Release/Fast Shell.app
+# output: build/macos/Build/Products/Release/Fast Shell.app
 ```
 
-### 首次打开被 Gatekeeper 拦下
+### Gatekeeper blocks the first launch
 
-本地自签名构建的 `.app` 未经过 Apple 公证：
+A locally self-signed `.app` is not notarized by Apple:
 
 ```bash
 xattr -dr com.apple.quarantine "build/macos/Build/Products/Release/Fast Shell.app"
 ```
 
-### 渲染后端说明
+### Rendering backend
 
-Flutter 3.47 起 macOS 默认使用 **Impeller** 渲染后端，本项目在其上出现过斜向拉丝花屏，
-因此 `macos/Runner/Info.plist` 中显式关闭，回退到 Skia：
+Starting with Flutter 3.47, macOS defaults to the **Impeller** renderer. This project hit diagonal streaking
+artifacts under it, so Impeller is explicitly disabled in `macos/Runner/Info.plist` to fall back to Skia:
 
 ```xml
 <key>FLTEnableImpeller</key>
 <false/>
 ```
 
-若你的机器在 Impeller 下无异常，可移除该键以启用 Impeller 获得更好的合成性能。
+If Impeller works fine on your machine, remove that key to get better compositing performance.
 
-### 沙盒配置
+### Sandbox configuration
 
-`macos/Runner/*.entitlements` 中已声明必要能力，改动前请留意：
+The required capabilities are already declared in `macos/Runner/*.entitlements`. Read this before changing them:
 
-| 权限 | 用途 |
+| Entitlement | Purpose |
 | --- | --- |
-| `com.apple.security.network.client` | SSH 出站连接（必需） |
-| `com.apple.security.files.user-selected.read-write` | 上传 / 下载用户通过面板选择的文件 |
-| `com.apple.security.files.downloads.read-write` | 默认下载目录（**下载功能的兜底保障，不要删**） |
-| `com.apple.security.files.home-relative-path.read-only: ~/.ssh/` | 免手动选文件的私钥读取 |
+| `com.apple.security.network.client` | Outbound SSH connections (required) |
+| `com.apple.security.files.user-selected.read-write` | Uploading / downloading files the user picks in a panel |
+| `com.apple.security.files.downloads.read-write` | Default download directory (**the safety net for downloads — do not remove**) |
+| `com.apple.security.files.home-relative-path.read-only: ~/.ssh/` | Reading private keys without a manual file picker |
 
-> **注意**：`file_picker` 在 macOS 上只返回路径字符串，**不会**为返回的目录保留安全作用域书签。
-> 因此在沙盒里，把文件写进用户通过面板选择的目录有时会被系统拒绝。
-> 这就是下载默认落地 `~/Downloads`、自选位置前先做一次写入探测的原因。
+> **Note**: on macOS `file_picker` only returns a path string and does **not** retain a security-scoped
+> bookmark for the returned directory. Inside the sandbox, writing into a user-selected directory can
+> therefore be refused by the system. That is why downloads default to `~/Downloads` and why a custom
+> location is write-probed first.
 
-### 发布新版本
+### Publishing a release
 
-安装包通过 **CNB Release** 分发（与 GitHub Releases 等价，支持指定版本号与附件下载）。
-一条命令完成「打标签 → 构建 → 打包 → 建版本 → 传附件 → 确认」：
+Installers are distributed through GitHub Releases and CNB Releases. One command does everything —
+tag, build, package, create the release, upload the asset, and confirm it:
 
 ```bash
-CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0
-# 指定发布说明（放 docs/releases/ 下随代码一起版本管理）：
-CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0 --notes docs/releases/v1.1.0.md
-# 只重新上传、不重新构建：
-CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0 --skip-build
-# 只改版本说明，不碰构建与附件（附件几十 MB，没必要重传）：
-CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0 --notes-only --notes docs/releases/v1.1.0.md
+CNB_TOKEN=<access-token> tool/publish_release.sh 1.1.0
+# with release notes kept under version control in docs/releases/:
+CNB_TOKEN=<access-token> tool/publish_release.sh 1.1.0 --notes docs/releases/v1.1.0.md
+# re-upload without rebuilding:
+CNB_TOKEN=<access-token> tool/publish_release.sh 1.1.0 --skip-build
+# update the description only, leaving the build and asset untouched:
+CNB_TOKEN=<access-token> tool/publish_release.sh 1.1.0 --notes-only --notes docs/releases/v1.1.0.md
 ```
 
-访问令牌在 <https://cnb.cool/profile/token/create> 创建，**授权范围必须包含 `repo-release:rw`**。
-注意 `cnb login` 拿到的 OAuth 令牌不带这个权限，只能用访问令牌。
+Create the token at <https://cnb.cool/profile/token/create> with **`repo-release:rw`** in its scope. The
+OAuth token from `cnb login` does not carry that permission — only an access token works.
 
-附件上传是标准三步（脚本已封装）：取 COS 预签名地址 → `PUT` 直传对象存储 → 回调 `verify_url` 确认。
-少了最后一步，附件会停在「传上去了但看不到」的状态。
+Asset upload is a three-step protocol (wrapped by the script): request a pre-signed COS URL, `PUT` the file
+straight to object storage, then call the returned `verify_url` to confirm. Skip the last step and the asset
+stays in an "uploaded but invisible" limbo.
 
 ---
 
-## 数据存放位置
+## Where data lives
 
-| 内容 | 路径 |
+| What | Path |
 | --- | --- |
-| 加密配置（连接 + 设置） | `~/Library/Containers/com.hhaip.hhaipShell/Data/Library/Application Support/com.hhaip.hhaipShell/vault.enc` |
-| 主密钥（权限 0600） | 同目录 `vault.key` |
+| Encrypted config (connections + settings) | `~/Library/Containers/com.hhaip.hhaipShell/Data/Library/Application Support/com.hhaip.hhaipShell/vault.enc` |
+| Master key (mode 0600) | `vault.key` in the same directory |
 
-> 删除 `vault.key` 会导致已有连接配置无法解密（应用会自动把损坏文件备份为 `vault.enc.corrupt-*` 并重置）。
+> Deleting `vault.key` makes existing connection configs undecryptable (the app backs the damaged file up as
+> `vault.enc.corrupt-*` and resets).
 
 ---
 
-## 代码结构
+## Code structure
 
 ```
 lib/
-├── main.dart                    # 入口：先 runApp，再异步初始化加密仓库（缩短启动白屏）
+├── main.dart                    # Entry point: runApp first, then async vault init (shorter blank screen)
 ├── models/
-│   ├── app_settings.dart        # 应用设置（字号、分类列表等）
-│   ├── connection.dart          # 连接模型 + 序列化
-│   ├── remote_entry.dart        # 远端目录项
-│   └── transfer_task.dart       # 传输任务（进度 / 速度 / 状态）
+│   ├── app_settings.dart        # App settings (font size, category list, ...)
+│   ├── connection.dart          # Connection model + serialization
+│   ├── remote_entry.dart        # Remote directory entry
+│   └── transfer_task.dart       # Transfer task (progress / speed / state)
 ├── services/
-│   ├── vault.dart               # AES-256-GCM 本地加密仓库（HKDF + 机器 UUID）
-│   ├── ssh_session.dart         # SSH 会话 + SFTP 通道封装 + 流式 UTF-8 解码
-│   ├── monitor_service.dart     # 远端指标采集（CPU/内存/磁盘/网络/进程/容器）
-│   ├── local_io.dart            # 本地下载目录 / 写入探测 / 访达定位 / 错误翻译
-│   ├── log_text.dart            # 日志文本纯函数（净化 / 行数统计），可独立自检
-│   └── remote_path.dart         # 远端路径工具
+│   ├── vault.dart               # AES-256-GCM local vault (HKDF + machine UUID)
+│   ├── ssh_session.dart         # SSH session + SFTP channel wrapper + streaming UTF-8 decoding
+│   ├── monitor_service.dart     # Remote metric collection (CPU/memory/disk/network/process/containers)
+│   ├── local_io.dart            # Downloads directory / write probe / reveal in Finder / error translation
+│   ├── log_text.dart            # Pure log-text helpers (sanitize / line count), independently testable
+│   └── remote_path.dart         # Remote path utilities
 ├── state/
-│   ├── app_store.dart           # 全局状态：连接 / 标签 / 传输 / SFTP / 设置
-│   └── monitor_state.dart       # 每标签页的监控状态：轮询 / 曲线 / 容器 / 日志
+│   ├── app_store.dart           # Global state: connections / tabs / transfers / SFTP / settings
+│   └── monitor_state.dart       # Per-tab monitoring state: polling / curves / containers / logs
 └── ui/
-    ├── home_page.dart           # 主框架：侧栏 + 标签栏 + 工作区 + 全局快捷键
-    ├── sidebar.dart             # 连接列表（搜索 / 分类 / 右键菜单）
-    ├── connection_editor.dart   # 连接编辑弹窗（含分类管理）
-    ├── terminal_panel.dart      # 终端视图 + 工具栏 + 功能键条
-    ├── monitor_panel.dart       # 服务器监控 + Docker 容器 + 日志全屏
-    ├── sftp_panel.dart          # 文件面板（目录树 / 查看 / 编辑 / 上传下载）
-    ├── transfer_bar.dart        # 传输队列
-    ├── settings_dialog.dart     # 设置
-    ├── quick_connect.dart       # 快速连接解析
-    ├── theme.dart               # 配色 / 主题 / 终端配色
-    └── widgets/common.dart      # 通用小组件与弹窗
+    ├── home_page.dart           # Main frame: sidebar + tab strip + workspace + global shortcuts
+    ├── sidebar.dart             # Connection list (search / categories / context menu)
+    ├── connection_editor.dart   # Connection editor dialog (with category management)
+    ├── terminal_panel.dart      # Terminal view + toolbar + function key bar
+    ├── monitor_panel.dart       # Server monitoring + Docker containers + full-screen logs
+    ├── sftp_panel.dart          # File panel (tree / view / edit / upload / download)
+    ├── transfer_bar.dart        # Transfer queue
+    ├── settings_dialog.dart     # Settings
+    ├── quick_connect.dart       # Quick-connect parsing
+    ├── theme.dart               # Colours / theme / terminal palette
+    └── widgets/common.dart      # Shared widgets and dialogs
 tool/
-├── verify.dart                  # 纯 Dart 自检（59 项），CI 可直接跑
-├── build_release.sh             # 标准发布打包（剥符号 + 产物体检）
-├── publish_release.sh           # 发布到 CNB Release（打包 + 建版本 + 传附件）
-├── sftp_smoke.dart              # SFTP 冒烟脚本
-└── gen_logo.py                  # 应用图标生成（纯 Python SDF 抗锯齿）
+├── verify.dart                  # Pure-Dart self-check (59 assertions), CI-friendly
+├── build_release.sh             # Standard release build (strip symbols + inspect bundle)
+├── publish_release.sh           # Publish to CNB Releases (package + create release + upload asset)
+├── sftp_smoke.dart              # SFTP smoke script
+└── gen_logo.py                  # App icon generator (pure-Python SDF antialiasing)
 ```
 
 ---
 
-## 性能取舍
+## Performance notes
 
-项目在「长时间挂着不卡」上做了若干针对性处理，供参考：
+The project goes out of its way to stay smooth when left running for days:
 
-- **终端不用 `SelectableText` 逐行渲染**，改用 xterm 的字符网格 —— 只画可见区域，滚动缓冲再大也不影响帧率
-- **监控曲线**用 `CustomPainter` 手绘并精确实现 `shouldRepaint`，避免每帧无谓重绘
-- **日志刷新自驱动**：终端监听数据变化后 250ms 节流局部刷新，不触发整页 `setState`
-- **重绘隔离**：终端、日志、曲线各自包在 `RepaintBoundary` 内
-- **后台暂停轮询**：应用失焦 / 最小化时停掉所有远程采样
-- **关闭标签延迟释放**：先通知 UI 移除，渲染帧结束后再 `dispose`，避免渲染树在帧中被拆导致的残留花屏
-- **打包瘦身**：移除未使用字体依赖，`--split-debug-info` 剥离调试信息，发布脚本会列出包体构成并检查是否误打包了 `*.dart` / `*.dSYM` / `tool` / `test`
-
----
-
-## 品牌
-
-- 产品名：**Fast Shell**
-- 图标：`tool/gen_logo.py` 生成（SDF 抗锯齿纯 Python 渲染），写入 `macos/Runner/Assets.xcassets/AppIcon.appiconset/`，界面内使用 `assets/logo.png`
+- **The terminal does not render line-by-line `SelectableText`** — it uses xterm's character grid, painting
+  only the visible region, so scrollback depth has no effect on frame rate
+- **Monitoring curves** are hand-drawn with `CustomPainter` and a precise `shouldRepaint`, avoiding needless
+  repaints every frame
+- **Log refresh is data-driven**: the terminal notifies on change and refreshes a small region at a 250 ms
+  throttle instead of rebuilding the whole page
+- **Repaint isolation**: the terminal, log pane and curves each sit inside their own `RepaintBoundary`
+- **Polling pauses in the background**: all remote sampling stops while the app is unfocused or minimised
+- **Tabs are disposed after the frame**: the UI is notified first, then `dispose` runs after the render
+  frame, preventing the render tree from being torn down mid-frame (which caused leftover artifacts)
+- **Lean bundles**: unused font dependencies removed, `--split-debug-info` strips debug info, and the release
+  script lists the bundle contents and checks that no `*.dart` / `*.dSYM` / `tool` / `test` slipped in
 
 ---
 
-## 已知边界
+## Branding
 
-- 目前只提供 macOS 桌面版（Windows 版需补 `flutter create --platforms=windows` 与对应窗口配置）
-- 未接入 SSH Agent（`SSH_AUTH_SOCK`）与跳板机 ProxyJump，也未提供端口转发面板
-- 文件上传 / 下载按 256KB 分块流式传输，进度按字节统计，暂不支持断点续传
-- 文件在线编辑上限 1MB（超出会提示，不做静默截断）
-- 监控采集依赖远端常见命令（`/proc`、`df`、`ps`、`docker`），极小众发行版可能部分指标为空
+- Product name: **Fast Shell**
+- Icon: generated by `tool/gen_logo.py` (pure-Python SDF antialiasing), written into
+  `macos/Runner/Assets.xcassets/AppIcon.appiconset/`; the in-app copy lives at `assets/logo.png`
 
 ---
 
-## 贡献
+## Known limitations
 
-欢迎提交 Issue 与 Pull Request，详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- macOS desktop only for now (a Windows build needs `flutter create --platforms=windows` plus window config)
+- No SSH Agent (`SSH_AUTH_SOCK`) support, no ProxyJump bastion hosts, no port-forwarding panel
+- Uploads and downloads stream in 256 KB chunks with byte-based progress; no resume support yet
+- In-place file editing is capped at 1 MB (it tells you instead of silently truncating)
+- Metric collection relies on common remote commands (`/proc`, `df`, `ps`, `docker`), so exotic distros may
+  report some metrics as empty
 
-提交前请确保：
+---
+
+## Contributing
+
+Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Please make sure these pass before submitting:
 
 ```bash
-dart run tool/verify.dart   # 59 项自检全绿
-flutter analyze             # 无 warning 及以上
+dart run tool/verify.dart   # all 59 assertions green
+flutter analyze             # no warnings or above
 ```
 
-## 更新记录
+## Changelog
 
-见 [CHANGELOG.md](CHANGELOG.md)。
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
