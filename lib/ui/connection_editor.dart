@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
@@ -71,6 +73,10 @@ class _ConnectionEditorDialogState extends State<ConnectionEditorDialog> {
   bool _obscurePassphrase = true;
   String? _error;
   late final List<String> _categories;
+
+  /// 分类下拉菜单。删除分类后需要用它把菜单重新弹出来，
+  /// 展示删除后的最新列表（见 _deleteCategory 的说明）。
+  final _menuKey = GlobalKey<PopupMenuButtonState<String>>();
 
   @override
   void initState() {
@@ -513,6 +519,7 @@ class _ConnectionEditorDialogState extends State<ConnectionEditorDialog> {
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   return PopupMenuButton<String>(
+                    key: _menuKey,
                     constraints: BoxConstraints.tightFor(
                       width: constraints.maxWidth,
                     ),
@@ -526,7 +533,8 @@ class _ConnectionEditorDialogState extends State<ConnectionEditorDialog> {
                       side: const BorderSide(color: AppColors.borderSoft),
                     ),
                     onSelected: (next) => setState(() => _group.text = next),
-                    itemBuilder: (context) => [
+                    // menuContext 指向菜单所在的 Overlay 路由，仅用于关闭菜单本身
+                    itemBuilder: (menuContext) => [
                       for (final name in _categories)
                         PopupMenuItem(
                           value: name,
@@ -554,7 +562,14 @@ class _ConnectionEditorDialogState extends State<ConnectionEditorDialog> {
                                   ),
                                   padding: EdgeInsets.zero,
                                   // 子按钮自己吃掉点击，不会触发选中
-                                  onPressed: () => _deleteCategory(name),
+                                  onPressed: () {
+                                    // 菜单项是在「打开菜单那一刻」一次性构建的，
+                                    // 之后对编辑器 setState 不会重建这层已打开的路由，
+                                    // 删掉的项会一直挂在菜单里 —— 所以先关掉菜单，
+                                    // 删完再把它重新弹出来（见 _deleteCategory）。
+                                    Navigator.of(menuContext).pop();
+                                    unawaited(_deleteCategory(name));
+                                  },
                                 ),
                             ],
                           ),
@@ -615,7 +630,14 @@ class _ConnectionEditorDialogState extends State<ConnectionEditorDialog> {
     await widget.onAddCategory?.call(trimmed);
   }
 
-  /// 删除分类：确认后从列表移除；上层会把该分类下的连接归到「默认」
+  /// 删除分类：确认后从列表移除；上层会把该分类下的连接归到「默认」。
+  ///
+  /// 为什么删完要重新弹出菜单：分类下拉用的是 PopupMenuButton，它的菜单项在
+  /// **打开菜单那一刻**一次性构建成一个 Overlay 路由。之后对编辑器 setState
+  /// 只会重建字段控件所在的这棵树，**不会**重建那个已经打开的路由 ——
+  /// 结果就是删掉的分类继续挂在菜单里，看起来「删了没反应」。
+  /// 所以这里先把菜单关掉（在 onPressed 里 pop），逻辑跑完再重新弹一次，
+  /// 此时 itemBuilder 会按最新的 _categories 重新构建，列表就是对的。
   Future<void> _deleteCategory(String name) async {
     final confirmed = await showConfirmDialog(
       context,
@@ -624,14 +646,22 @@ class _ConnectionEditorDialogState extends State<ConnectionEditorDialog> {
       confirmText: '删除',
       danger: true,
     );
-    if (!confirmed || !mounted) return;
-    setState(() {
-      _categories.removeWhere((item) => item == name);
-      if (_group.text.trim() == name) {
-        _group.text = _categories.isEmpty ? '默认' : _categories.first;
-      }
-    });
-    await widget.onDeleteCategory?.call(name);
+    if (!mounted) return;
+    if (confirmed) {
+      setState(() {
+        _categories.removeWhere((item) => item == name);
+        // 删掉的正好是当前选中的分类，回落到第一项
+        if (_group.text.trim() == name) {
+          _group.text = _categories.isEmpty ? '默认' : _categories.first;
+        }
+      });
+      await widget.onDeleteCategory?.call(name);
+      if (!mounted) return;
+    }
+    // 确认和取消都要把菜单还原：前者让用户看到删除后的最新列表，
+    // 后者避免「点了删除、取消一下，菜单被关了」的突兀感。
+    final menu = _menuKey.currentState;
+    if (menu != null) menu.showButtonMenu();
   }
 
   Widget _field({
