@@ -25,6 +25,18 @@ xattr -dr com.apple.quarantine "/Applications/Fast Shell.app"
 
 ---
 
+## 截图
+
+**主界面** —— 终端、SFTP 文件、服务器监控三栏并排，一个窗口完成日常运维：
+
+![主界面：SSH 终端 + SFTP 文件 + 服务器监控](docs/screenshots/main-window.png)
+
+**新建连接**：
+
+![新建连接](docs/screenshots/connection-editor.png)
+
+---
+
 ## 为什么做这个
 
 日常运维往往要在「终端工具 + 文件传输工具 + 一个 ssh 进去敲 `top` 的窗口」之间来回切。
