@@ -1,0 +1,1244 @@
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import 'package:xterm/xterm.dart';
+
+import '../services/monitor_service.dart';
+import '../state/app_store.dart';
+import '../state/monitor_state.dart';
+import 'theme.dart';
+import 'widgets/common.dart';
+
+/// 服务器监控面板：主机资源 + Docker 容器（操作与日志）
+class MonitorPanel extends StatefulWidget {
+  const MonitorPanel({super.key, required this.tab, required this.onClose});
+
+  final TerminalTab tab;
+  final VoidCallback onClose;
+
+  @override
+  State<MonitorPanel> createState() => _MonitorPanelState();
+}
+
+class _MonitorPanelState extends State<MonitorPanel> {
+  final ScrollController _logScroll = ScrollController();
+
+  /// 全屏日志窗口是否打开：打开时内嵌视图让位，
+  /// 否则两个视口会同时改动同一个 Terminal 的网格尺寸
+  bool _fullscreenLog = false;
+
+  TerminalTab get tab => widget.tab;
+
+  @override
+  void dispose() {
+    _logScroll.dispose();
+    super.dispose();
+  }
+
+  void _toast(String message, {bool error = false}) {
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(message, style: const TextStyle(fontSize: 12.5)),
+        behavior: SnackBarBehavior.floating,
+        width: 340,
+        duration: Duration(seconds: error ? 4 : 2),
+        backgroundColor: error ? const Color(0xFF5A2430) : const Color(0xFF232A35),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<AppStore>();
+    final monitor = tab.monitor;
+    final showLogs = monitor.logContainer != null;
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(left: BorderSide(color: AppColors.border)),
+      ),
+      child: Column(
+        children: [
+          _header(store, showLogs),
+          Expanded(
+            child: showLogs
+                ? _logView(store, monitor)
+                : _dashboard(store, monitor),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _header(AppStore store, bool showLogs) {
+    final monitor = tab.monitor;
+    return Container(
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.monitor_heart_outlined,
+              size: 15, color: Color(0xFF12B5A5)),
+          const SizedBox(width: 7),
+          Text(
+            showLogs ? '容器日志 · ${monitor.logContainer}' : '服务器监控',
+            style: const TextStyle(
+              fontSize: 12.8,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const Spacer(),
+          if (showLogs)
+            AppIconButton(
+              icon: monitor.logFollowing
+                  ? Icons.pause_circle_outline
+                  : Icons.play_circle_outline,
+              tooltip: monitor.logFollowing ? '停止跟踪' : '实时跟踪',
+              active: monitor.logFollowing,
+              iconColor: const Color(0xFF12A150),
+              onPressed: () => store.toggleLogFollow(tab),
+            ),
+          if (showLogs)
+            AppIconButton(
+              icon: Icons.refresh,
+              tooltip: '重新加载',
+              iconColor: const Color(0xFF2F9BD8),
+              onPressed: () =>
+                  store.openContainerLogs(tab, monitor.logContainer!),
+            ),
+          if (showLogs)
+            AppIconButton(
+              icon: Icons.open_in_full,
+              tooltip: '全屏查看',
+              iconColor: const Color(0xFF2F6BFF),
+              onPressed: () => _openFullscreenLogs(store),
+            ),
+          if (!showLogs) ...[
+            AppIconButton(
+              icon: Icons.speed_outlined,
+              tooltip: '刷新容器资源占用',
+              iconColor: const Color(0xFF9B6BE0),
+              onPressed: monitor.statsLoading
+                  ? null
+                  : () => store.loadDockerStats(tab),
+            ),
+            AppIconButton(
+              icon: Icons.refresh,
+              tooltip: '立即刷新（每 3 秒自动刷新）',
+              iconColor: const Color(0xFF2F9BD8),
+              onPressed: () => store.refreshMonitor(tab),
+            ),
+          ],
+          AppIconButton(
+            icon: Icons.close,
+            tooltip: showLogs ? '返回监控' : '收起面板',
+            onPressed: () {
+              if (showLogs) {
+                store.closeContainerLogs(tab);
+              } else {
+                widget.onClose();
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------ 主面板
+
+  Widget _dashboard(AppStore store, MonitorState monitor) {
+    final snapshot = monitor.snapshot;
+    if (snapshot == null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2.2),
+            ),
+            const SizedBox(height: 12),
+            _LoadingHint(error: monitor.error),
+            if (monitor.error != null) ...[
+              const SizedBox(height: 6),
+              Text('会持续自动重试，一般几秒内出数据', style: AppText.tertiary),
+            ],
+          ],
+        ),
+      );
+    }
+    if (monitor.error != null && snapshot.hostname.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.error_outline, size: 22, color: AppColors.danger),
+            const SizedBox(height: 10),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Text(monitor.error!, textAlign: TextAlign.center,
+                  style: AppText.secondary),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+      children: [
+        _hostCard(snapshot),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: _metricCard(
+                label: 'CPU',
+                value: snapshot.cpuPercent == null
+                    ? '—'
+                    : '${snapshot.cpuPercent!.toStringAsFixed(1)}%',
+                subtitle: '${snapshot.cores} 核',
+                percent: snapshot.cpuPercent,
+                color: const Color(0xFF2F6BFF),
+                history: monitor.cpuHistory,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _metricCard(
+                label: '内存',
+                value: '${snapshot.memPercent.toStringAsFixed(1)}%',
+                subtitle:
+                    '${_gb(snapshot.memUsedBytes)} / ${_gb(snapshot.memTotalBytes)}',
+                percent: snapshot.memPercent,
+                color: const Color(0xFF8B5CF6),
+                history: monitor.memHistory,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _networkCard(monitor),
+        const SizedBox(height: 10),
+        _diskCard(snapshot),
+        const SizedBox(height: 10),
+        _processCard(snapshot),
+        const SizedBox(height: 12),
+        _dockerSection(store),
+      ],
+    );
+  }
+
+  Widget _hostCard(HostSnapshot snapshot) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: AppColors.canvas,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.borderSoft),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.dns_outlined, size: 14, color: AppColors.textSecondary),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  snapshot.hostname,
+                  style: const TextStyle(
+                    fontSize: 12.8,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Text(_uptime(snapshot.uptimeSeconds), style: AppText.tertiary),
+            ],
+          ),
+          if (snapshot.os.isNotEmpty || snapshot.kernel.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              [
+                if (snapshot.os.isNotEmpty) snapshot.os,
+                if (snapshot.kernel.isNotEmpty) snapshot.kernel,
+              ].join(' · '),
+              style: AppText.tertiary,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _metricCard({
+    required String label,
+    required String value,
+    required String subtitle,
+    required double? percent,
+    required Color color,
+    required List<double> history,
+  }) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: AppColors.canvas,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.borderSoft),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(label, style: AppText.tertiary),
+              const Spacer(),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(subtitle, style: AppText.tertiary),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 34,
+            width: double.infinity,
+            child: CustomPaint(
+              painter: _SparklinePainter(data: history, color: color),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _networkCard(MonitorState monitor) {
+    final rx = monitor.rxHistory.isEmpty
+        ? null
+        : monitor.rxHistory.last;
+    final tx = monitor.txHistory.isEmpty
+        ? null
+        : monitor.txHistory.last;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: AppColors.canvas,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.borderSoft),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text('网络', style: AppText.tertiary),
+              const Spacer(),
+              Icon(Icons.south_west, size: 12, color: const Color(0xFF12A150)),
+              const SizedBox(width: 3),
+              Text(rx == null ? '—' : '${_rate(rx)} ↓', style: AppText.body),
+              const SizedBox(width: 10),
+              Icon(Icons.north_east, size: 12, color: const Color(0xFF2F6BFF)),
+              const SizedBox(width: 3),
+              Text(tx == null ? '—' : '${_rate(tx)} ↑', style: AppText.body),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 30,
+            width: double.infinity,
+            child: CustomPaint(
+              painter: _SparklinePainter(
+                data: monitor.rxHistory,
+                color: const Color(0xFF12A150),
+                overlay: monitor.txHistory,
+                overlayColor: const Color(0xFF2F6BFF),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _diskCard(HostSnapshot snapshot) {
+    final disks = snapshot.disks;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: AppColors.canvas,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.borderSoft),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('磁盘', style: AppText.tertiary),
+          const SizedBox(height: 8),
+          if (disks.isEmpty)
+            const Text('未读取到挂载点', style: AppText.tertiary)
+          else
+            for (final disk in disks.take(6))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 7),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 86,
+                      child: Text(
+                        disk.mount,
+                        style: const TextStyle(fontSize: 11.5, color: AppColors.textSecondary),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: LinearProgressIndicator(
+                          value: (disk.percent / 100).clamp(0, 1),
+                          minHeight: 5,
+                          backgroundColor: AppColors.border,
+                          color: disk.percent > 90
+                              ? AppColors.danger
+                              : disk.percent > 75
+                                  ? const Color(0xFFF0A02E)
+                                  : const Color(0xFF2F9BD8),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 108,
+                      child: Text(
+                        '${_gb(disk.usedBytes)} / ${_gb(disk.totalBytes)} · ${disk.percent.toStringAsFixed(0)}%',
+                        style: AppText.tertiary,
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+
+  Widget _processCard(HostSnapshot snapshot) {
+    final processes = snapshot.processes;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: AppColors.canvas,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.borderSoft),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('CPU 占用 Top', style: AppText.tertiary),
+          const SizedBox(height: 6),
+          if (processes.isEmpty)
+            const Text('未读取到进程', style: AppText.tertiary)
+          else
+            for (final proc in processes.take(5))
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2.5),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 44,
+                      child: Text('${proc.pid}',
+                          style: AppText.mono.copyWith(fontSize: 10.5)),
+                    ),
+                    Expanded(
+                      child: Text(
+                        proc.command,
+                        style: const TextStyle(
+                            fontSize: 11.5, color: AppColors.textSecondary),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 66,
+                      child: Text(
+                        '${proc.cpuPercent.toStringAsFixed(1)}% cpu',
+                        style: AppText.tertiary,
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+
+  Widget _dockerSection(AppStore store) {
+    final monitor = tab.monitor;
+    final containers = monitor.dockerContainers;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: AppColors.canvas,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.borderSoft),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.view_in_ar_outlined,
+                  size: 14, color: Color(0xFF0E9888)),
+              const SizedBox(width: 6),
+              const Text('Docker 容器', style: AppText.tertiary),
+              const Spacer(),
+              if (monitor.dockerLoading || monitor.statsLoading)
+                const SizedBox(
+                  width: 11,
+                  height: 11,
+                  child: CircularProgressIndicator(strokeWidth: 1.6),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (containers.isEmpty)
+            Text(
+              monitor.dockerLoading
+                  ? '正在检测容器…'
+                  : '未检测到容器（未安装 Docker 或没有容器）',
+              style: AppText.tertiary,
+            )
+          else
+            for (final container in containers)
+              _containerRow(store, container),
+        ],
+      ),
+    );
+  }
+
+  Widget _containerRow(AppStore store, ContainerInfo container) {
+    final monitor = tab.monitor;
+    final stat = monitor.dockerStats[container.name];
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(9, 8, 9, 8),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(7),
+          border: Border.all(color: AppColors.borderSoft),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: container.isRunning
+                        ? AppColors.success
+                        : AppColors.textTertiary,
+                  ),
+                ),
+                const SizedBox(width: 7),
+                Expanded(
+                  child: Text(
+                    container.name,
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Text(container.status, style: AppText.tertiary),
+              ],
+            ),
+            const SizedBox(height: 3),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    container.image,
+                    style: AppText.tertiary,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (stat != null)
+                  Text(
+                    'cpu ${stat.cpuPercent?.toStringAsFixed(1) ?? '?'}% · '
+                    '${stat.memUsage} (${stat.memPercent?.toStringAsFixed(1) ?? '?'}%)',
+                    style: AppText.tertiary,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 7),
+            Row(
+              children: [
+                if (!container.isRunning)
+                  _opButton(store, container, '启动', Icons.play_arrow,
+                      const Color(0xFF12A150), 'start')
+                else ...[
+                  _opButton(store, container, '停止', Icons.stop,
+                      const Color(0xFFE0A02E), 'stop'),
+                  const SizedBox(width: 6),
+                  _opButton(store, container, '重启', Icons.refresh,
+                      const Color(0xFF2F6BFF), 'restart'),
+                ],
+                const SizedBox(width: 6),
+                _opButton(store, container, '日志', Icons.article_outlined,
+                    const Color(0xFF9B6BE0), null),
+                const SizedBox(width: 6),
+                _opButton(store, container, '删除', Icons.delete_outline,
+                    AppColors.danger, 'rm'),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _opButton(
+    AppStore store,
+    ContainerInfo container,
+    String label,
+    IconData icon,
+    Color color,
+    String? action,
+  ) {
+    return _MiniButton(
+      label: label,
+      icon: icon,
+      color: color,
+      onTap: () => _runContainerOp(store, container, action),
+    );
+  }
+
+  Future<void> _runContainerOp(
+    AppStore store,
+    ContainerInfo container,
+    String? action,
+  ) async {
+    if (action == null) {
+      await store.openContainerLogs(tab, container.name);
+      return;
+    }
+    if (action == 'rm') {
+      final confirmed = await showConfirmDialog(
+        context,
+        title: '删除容器',
+        message: '将永久删除容器「${container.name}」及其未保存的数据，该操作不可撤销。确认删除？',
+        confirmText: '删除',
+        danger: true,
+      );
+      if (!confirmed || !mounted) return;
+    }
+    final output = await store.containerAction(tab, container, action);
+    if (!mounted) return;
+    if (output.isNotEmpty && !output.contains('Error')) {
+      final labels = {
+        'start': '已启动',
+        'stop': '已停止',
+        'restart': '已重启',
+        'rm': '已删除',
+      };
+      _toast('容器 ${container.name} ${labels[action] ?? action}');
+      if (tab.monitor.logContainer != null && action == 'rm') {
+        await store.closeContainerLogs(tab);
+      }
+    } else if (output.isNotEmpty) {
+      _toast('操作失败：$output', error: true);
+    }
+  }
+
+  // ------------------------------------------------------------ 日志视图
+
+  /// 全屏查看容器日志
+  void _openFullscreenLogs(AppStore store) {
+    if (_fullscreenLog) return;
+    // 先让内嵌视图让出 Terminal，再弹全屏，避免两个视口在同一帧里
+    // 用不同尺寸去 resize 同一个终端
+    setState(() => _fullscreenLog = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showGeneralDialog(
+        context: context,
+        barrierDismissible: true,
+        barrierLabel: '容器日志',
+        barrierColor: Colors.black54,
+        transitionDuration: const Duration(milliseconds: 150),
+        pageBuilder: (dialogContext, animation, secondaryAnimation) {
+          return Dialog.fullscreen(
+            backgroundColor: const Color(0xFF0D1626),
+            child: _FullscreenLogView(
+              store: store,
+              tab: tab,
+              onClose: () => Navigator.of(dialogContext).pop(),
+            ),
+          );
+        },
+      ).whenComplete(() {
+        if (mounted) setState(() => _fullscreenLog = false);
+      });
+    });
+  }
+
+  Widget _logView(AppStore store, MonitorState monitor) {
+    if (monitor.logLoading && monitor.logLineCount == 0) {
+      return const Center(
+        child: SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(strokeWidth: 2.2),
+        ),
+      );
+    }
+    if (_fullscreenLog) {
+      return const ColoredBox(
+        color: Color(0xFF0D1626),
+        child: Center(
+          child: Text(
+            '日志已在全屏窗口打开',
+            style: TextStyle(fontSize: 11.5, color: Color(0xFF6B7686)),
+          ),
+        ),
+      );
+    }
+    // 实时跟踪时始终吸底（由 _LogTail 监听终端变化驱动，不依赖整页重建）
+    return Column(
+      children: [
+        // 零尺寸的尾部感知器：驱动吸底
+        _LogTail(
+          terminal: monitor.logTerminal,
+          scrollController: _logScroll,
+          following: monitor.logFollowing,
+          builder: (context) => const SizedBox.shrink(),
+        ),
+        if (monitor.logError != null)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            color: AppColors.danger.withValues(alpha: 0.08),
+            child: Text(
+              monitor.logError!,
+              style: const TextStyle(fontSize: 11.5, color: AppColors.danger),
+            ),
+          ),
+        Expanded(
+          child: Container(
+            color: const Color(0xFF0D1626),
+            child: _LogTerminal(
+              terminal: monitor.logTerminal,
+              scrollController: _logScroll,
+              fontSize: 11,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ------------------------------------------------------------ helpers
+
+  static String _gb(int bytes) {
+    if (bytes >= 1024 * 1024 * 1024) {
+      return '${(bytes / 1024 / 1024 / 1024).toStringAsFixed(1)} GB';
+    }
+    return '${(bytes / 1024 / 1024).toStringAsFixed(0)} MB';
+  }
+
+  static String _rate(double kbPerSecond) {
+    if (kbPerSecond >= 1024) {
+      return '${(kbPerSecond / 1024).toStringAsFixed(1)} MB/s';
+    }
+    return '${kbPerSecond.toStringAsFixed(0)} KB/s';
+  }
+
+  static String _uptime(int seconds) {
+    final days = seconds ~/ 86400;
+    final hours = (seconds % 86400) ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+    if (days > 0) return '已运行 $days 天 $hours 小时';
+    if (hours > 0) return '已运行 $hours 小时 $minutes 分';
+    return '已运行 $minutes 分钟';
+  }
+}
+
+/// 加载提示：显示已等待秒数，超过 5 秒给出引导文案
+class _LoadingHint extends StatefulWidget {
+  const _LoadingHint({this.error});
+
+  final String? error;
+
+  @override
+  State<_LoadingHint> createState() => _LoadingHintState();
+}
+
+class _LoadingHintState extends State<_LoadingHint> {
+  Timer? _timer;
+  int _elapsed = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _elapsed++);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final base = widget.error ?? '正在采集服务器数据…（首次连接需预热，请稍候）';
+    return Text(
+      _elapsed >= 5 ? '$base 已等待 $_elapsed 秒' : base,
+      style: AppText.tertiary,
+    );
+  }
+}
+
+/// 容器操作小按钮
+class _MiniButton extends StatefulWidget {
+  const _MiniButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  State<_MiniButton> createState() => _MiniButtonState();
+}
+
+class _MiniButtonState extends State<_MiniButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: widget.label,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: _hover ? widget.color.withValues(alpha: 0.1) : Colors.transparent,
+              borderRadius: BorderRadius.circular(5),
+              border: Border.all(
+                color: _hover
+                    ? widget.color.withValues(alpha: 0.5)
+                    : AppColors.borderSoft,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(widget.icon, size: 11.5, color: widget.color),
+                const SizedBox(width: 3),
+                Text(
+                  widget.label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: widget.color,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 迷你折线图
+class _SparklinePainter extends CustomPainter {
+  _SparklinePainter({
+    required this.data,
+    required this.color,
+    this.overlay,
+    this.overlayColor,
+  })  : _len = data.length,
+        _last = data.isEmpty ? null : data.last,
+        _overlayLen = overlay?.length ?? -1,
+        _overlayLast =
+            (overlay == null || overlay.isEmpty) ? null : overlay.last;
+
+  final List<double> data;
+  final Color color;
+  final List<double>? overlay;
+  final Color? overlayColor;
+
+  // 构造时快照：data 是原地增长的同一个 List 实例，
+  // 只比引用的话永远判定「没变化」，曲线就再也不会更新。
+  final int _len;
+  final double? _last;
+  final int _overlayLen;
+  final double? _overlayLast;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    _paintSeries(canvas, size, data, color);
+    final over = overlay;
+    if (over != null) {
+      _paintSeries(canvas, size, over, overlayColor ?? color);
+    }
+  }
+
+  void _paintSeries(Canvas canvas, Size size, List<double> data, Color color) {
+    if (data.isEmpty) return;
+    final maxPoint = data.reduce(math.max);
+    final maxV = math.max(maxPoint, 1.0) * 1.25;
+    final stepX = data.length > 1 ? size.width / (data.length - 1) : size.width;
+
+    final path = Path()..moveTo(0, size.height);
+    for (final (index, value) in data.indexed) {
+      final x = index * stepX;
+      final y = size.height - (value / maxV * size.height).clamp(0.0, size.height);
+      path.lineTo(x, y);
+    }
+    path.lineTo((data.length - 1) * stepX, size.height);
+    path.close();
+
+    canvas.drawPath(
+      path,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [color.withValues(alpha: 0.30), color.withValues(alpha: 0.02)],
+        ).createShader(Offset.zero & size),
+    );
+
+    final line = Path();
+    for (final (index, value) in data.indexed) {
+      final x = index * stepX;
+      final y = size.height - (value / maxV * size.height).clamp(0.0, size.height);
+      if (index == 0) {
+        line.moveTo(x, y);
+      } else {
+        line.lineTo(x, y);
+      }
+    }
+    canvas.drawPath(
+      line,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _SparklinePainter oldDelegate) {
+    if (oldDelegate.color != color) return true;
+    if (oldDelegate.overlayColor != overlayColor) return true;
+    // 数据是同一个 List 原地追加/裁剪的，比长度与末值即可判断出新点
+    if (oldDelegate._len != data.length) return true;
+    if (oldDelegate._last != (data.isEmpty ? null : data.last)) return true;
+    final over = overlay;
+    if (oldDelegate._overlayLen != (over?.length ?? -1)) return true;
+    if (oldDelegate._overlayLast !=
+        ((over == null || over.isEmpty) ? null : over.last)) {
+      return true;
+    }
+    return false;
+  }
+}
+
+/// 只读日志终端：用 xterm 的定宽字符网格渲染日志。
+///
+/// 为什么不用滚动文本列表：`Text`/`SelectableText` 会把整行排版成一个文本
+/// 层，docker 日志里几十万字符的单行 + 上千行内容会让图层尺寸爆炸，在 macOS
+/// 上表现为花屏（斜向拉丝）。xterm 只绘制可见单元格，行数再多也只是定长
+/// 网格，且原生渲染 ANSI 颜色，日志内容不做任何截断。
+class _LogTerminal extends StatelessWidget {
+  const _LogTerminal({
+    required this.terminal,
+    required this.scrollController,
+    this.fontSize = 11.5,
+    this.padding = const EdgeInsets.fromLTRB(10, 8, 10, 8),
+  });
+
+  final Terminal terminal;
+  final ScrollController scrollController;
+  final double fontSize;
+  final EdgeInsets padding;
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: TerminalView(
+        terminal,
+        // 只读：不接 onOutput，键盘输入不会回传远端
+        readOnly: true,
+        scrollController: scrollController,
+        theme: appTerminalTheme,
+        padding: padding,
+        textStyle: TerminalStyle(
+          fontSize: fontSize,
+          height: 1.35,
+          fontFamily: 'SF Mono',
+          fontFamilyFallback: const ['Menlo', 'monospace'],
+        ),
+        cursorType: TerminalCursorType.block,
+        alwaysShowCursor: false,
+        mouseCursor: SystemMouseCursors.text,
+      ),
+    );
+  }
+}
+
+/// 日志尾部感知：直接监听终端自身的变化，节流地刷新计数并保持吸底。
+///
+/// 终端（xterm）自己会重绘内容，所以日志滚滚而来时不需要 AppStore
+/// 通知整页重建——那样每 300ms 会把侧栏、标签、面板全部重造一遍。
+class _LogTail extends StatefulWidget {
+  const _LogTail({
+    required this.terminal,
+    required this.scrollController,
+    required this.following,
+    required this.builder,
+  });
+
+  final Terminal terminal;
+  final ScrollController scrollController;
+  final bool following;
+
+  /// 由刷新回调驱动重建的小块内容（如「N 行」计数）
+  final WidgetBuilder builder;
+
+  @override
+  State<_LogTail> createState() => _LogTailState();
+}
+
+class _LogTailState extends State<_LogTail> {
+  Timer? _throttle;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.terminal.addListener(_onTerminalChanged);
+  }
+
+  @override
+  void didUpdateWidget(_LogTail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.terminal != widget.terminal) {
+      oldWidget.terminal.removeListener(_onTerminalChanged);
+      widget.terminal.addListener(_onTerminalChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    _throttle?.cancel();
+    widget.terminal.removeListener(_onTerminalChanged);
+    super.dispose();
+  }
+
+  void _onTerminalChanged() {
+    // 窗口内的多次输出合并成一次刷新，避免高频日志把 UI 拖住
+    if (_throttle != null) return;
+    _throttle = Timer(const Duration(milliseconds: 250), () {
+      _throttle = null;
+      if (!mounted) return;
+      if (widget.following) _scrollToBottom();
+      setState(() {});
+    });
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final controller = widget.scrollController;
+      if (controller.hasClients && controller.position.maxScrollExtent > 0) {
+        controller.jumpTo(controller.position.maxScrollExtent);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(context);
+}
+
+/// 全屏容器日志视图
+class _FullscreenLogView extends StatefulWidget {
+  const _FullscreenLogView({
+    required this.store,
+    required this.tab,
+    required this.onClose,
+  });
+
+  final AppStore store;
+  final TerminalTab tab;
+  final VoidCallback onClose;
+
+  @override
+  State<_FullscreenLogView> createState() => _FullscreenLogViewState();
+}
+
+class _FullscreenLogViewState extends State<_FullscreenLogView> {
+  final ScrollController _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final monitor = widget.tab.monitor;
+
+    return CallbackShortcuts(
+      bindings: {
+        // Esc 退出全屏（吸底由 _LogTail 监听终端驱动）
+        const SingleActivator(LogicalKeyboardKey.escape): widget.onClose,
+      },
+      child: Focus(
+        autofocus: true,
+        child: Container(
+          color: const Color(0xFF0D1626),
+          child: Column(
+        children: [
+          Container(
+            height: 44,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            decoration: const BoxDecoration(
+              color: Color(0xFF101B2E),
+              border: Border(
+                bottom: BorderSide(color: Color(0xFF23324A)),
+              ),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.article_outlined,
+                    size: 15, color: Color(0xFF9B6BE0)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '容器日志 · ${monitor.logContainer ?? ''}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFFDCE5F2),
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                _LogTail(
+                  terminal: monitor.logTerminal,
+                  scrollController: _scroll,
+                  following: monitor.logFollowing,
+                  builder: (context) => Text(
+                    '${monitor.logLineCount} 行'
+                    '${monitor.logFollowing ? ' · 实时跟踪中' : ''}',
+                    style: const TextStyle(
+                        fontSize: 11.5, color: Color(0xFF6B7686)),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Tooltip(
+                  message: monitor.logFollowing ? '停止跟踪' : '实时跟踪',
+                  child: IconButton(
+                    icon: Icon(
+                      monitor.logFollowing
+                          ? Icons.pause_circle_outline
+                          : Icons.play_circle_outline,
+                      size: 18,
+                      color: monitor.logFollowing
+                          ? const Color(0xFF12A150)
+                          : const Color(0xFF6B7686),
+                    ),
+                    onPressed: () => widget.store.toggleLogFollow(widget.tab),
+                  ),
+                ),
+                Tooltip(
+                  message: '重新加载',
+                  child: IconButton(
+                    icon: const Icon(Icons.refresh,
+                        size: 18, color: Color(0xFF2F9BD8)),
+                    onPressed: monitor.logContainer == null
+                        ? null
+                        : () => widget.store
+                            .openContainerLogs(widget.tab, monitor.logContainer!),
+                  ),
+                ),
+                Tooltip(
+                  message: '退出全屏（Esc）',
+                  child: IconButton(
+                    icon: const Icon(Icons.close,
+                        size: 18, color: Color(0xFF6B7686)),
+                    onPressed: widget.onClose,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: _LogTerminal(
+              terminal: monitor.logTerminal,
+              scrollController: _scroll,
+              fontSize: 11.5,
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+            ),
+          ),
+        ],
+          ),
+        ),
+      ),
+    );
+  }
+}
