@@ -15,8 +15,7 @@ Built with Flutter 3.47 (macOS desktop) · dartssh2 (SSH / SFTP) · xterm.dart (
 ## Download
 
 Grab the latest `Fast-Shell-<version>-macos.zip` from
-[Releases](https://github.com/Eric-hhaip/fast-shell/releases) (mirror:
-[CNB](https://cnb.cool/hhaip.com/opensource/fast-shell/-/releases)), unzip it, and drag `Fast Shell.app`
+[Releases](https://github.com/Eric-hhaip/fast-shell/releases), unzip it, and drag `Fast Shell.app`
 into your Applications folder.
 
 If Gatekeeper blocks the first launch (the build is self-signed and not notarized by Apple):
@@ -142,8 +141,6 @@ connection details are encrypted locally and never leave your machine.
 
 ```bash
 git clone https://github.com/Eric-hhaip/fast-shell.git
-# or the CNB mirror:
-# git clone https://cnb.cool/hhaip.com/opensource/fast-shell.git
 cd fast-shell
 
 flutter pub get
@@ -202,25 +199,30 @@ The required capabilities are already declared in `macos/Runner/*.entitlements`.
 
 ### Publishing a release
 
-Installers are distributed through GitHub Releases and CNB Releases. One command does everything —
-tag, build, package, create the release, upload the asset, and confirm it:
+Installers are distributed through GitHub Releases (mirrored to CNB). One command does everything —
+tag, build, package, create the release, upload the asset:
 
 ```bash
-CNB_TOKEN=<access-token> tool/publish_release.sh 1.1.0
+GITHUB_TOKEN=<pat> tool/publish_github.sh 1.1.0
 # with release notes kept under version control in docs/releases/:
-CNB_TOKEN=<access-token> tool/publish_release.sh 1.1.0 --notes docs/releases/v1.1.0.md
+GITHUB_TOKEN=<pat> tool/publish_github.sh 1.1.0 --notes docs/releases/v1.1.0.md
 # re-upload without rebuilding:
-CNB_TOKEN=<access-token> tool/publish_release.sh 1.1.0 --skip-build
+GITHUB_TOKEN=<pat> tool/publish_github.sh 1.1.0 --skip-build
 # update the description only, leaving the build and asset untouched:
-CNB_TOKEN=<access-token> tool/publish_release.sh 1.1.0 --notes-only --notes docs/releases/v1.1.0.md
+GITHUB_TOKEN=<pat> tool/publish_github.sh 1.1.0 --notes-only --notes docs/releases/v1.1.0.md
 ```
 
-Create the token at <https://cnb.cool/profile/token/create> with **`repo-release:rw`** in its scope. The
-OAuth token from `cnb login` does not carry that permission — only an access token works.
+Create the token at <https://github.com/settings/tokens> — a classic PAT with the `repo` scope, or a
+fine-grained PAT limited to this repository with **Contents: Read and write**.
 
-Asset upload is a three-step protocol (wrapped by the script): request a pre-signed COS URL, `PUT` the file
-straight to object storage, then call the returned `verify_url` to confirm. Skip the last step and the asset
-stays in an "uploaded but invisible" limbo.
+The script pushes the code first. If the git protocol to `github.com` is blocked on your network, it
+automatically falls back to `tool/push_github_api.py`, which replays the local history through the REST
+API (blob → tree → commit → ref) and reproduces byte-identical commit SHAs.
+
+`tool/publish_release.sh` publishes the same artifact to the CNB mirror (`CNB_TOKEN` with
+`repo-release:rw`). Its asset upload is a three-step protocol — request a pre-signed COS URL, `PUT` the
+file straight to object storage, then call the returned `verify_url` to confirm; skip that last step and
+the asset stays in an "uploaded but invisible" limbo.
 
 ---
 
@@ -271,7 +273,9 @@ lib/
 tool/
 ├── verify.dart                  # Pure-Dart self-check (59 assertions), CI-friendly
 ├── build_release.sh             # Standard release build (strip symbols + inspect bundle)
-├── publish_release.sh           # Publish to CNB Releases (package + create release + upload asset)
+├── publish_github.sh            # Publish to GitHub Releases (push + release + upload asset)
+├── push_github_api.py           # Mirror git history to GitHub over the REST API (no git push)
+├── publish_release.sh           # Publish to the CNB mirror (package + create release + upload asset)
 ├── sftp_smoke.dart              # SFTP smoke script
 └── gen_logo.py                  # App icon generator (pure-Python SDF antialiasing)
 ```

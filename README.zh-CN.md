@@ -183,21 +183,24 @@ Flutter 3.47 起 macOS 默认使用 **Impeller** 渲染后端，本项目在其�
 
 ### 发布新版本
 
-安装包通过 **CNB Release** 分发（与 GitHub Releases 等价，支持指定版本号与附件下载）。
-一条命令完成「打标签 → 构建 → 打包 → 建版本 → 传附件 → 确认」：
+安装包通过 **CNB Release** 分发，同时镜像到 GitHub Releases。
+两条通道各有一条命令，完成「打标签 → 构建 → 打包 → 建版本 → 传附件 → 确认」：
 
 ```bash
+# CNB（本仓库主通道）
 CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0
-# 指定发布说明（放 docs/releases/ 下随代码一起版本管理）：
-CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0 --notes docs/releases/v1.1.0.md
-# 只重新上传、不重新构建：
-CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0 --skip-build
-# 只改版本说明，不碰构建与附件（附件几十 MB，没必要重传）：
-CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0 --notes-only --notes docs/releases/v1.1.0.md
+# GitHub 镜像
+GITHUB_TOKEN=<PAT> tool/publish_github.sh 1.1.0
+# 两个脚本都支持：--notes 指定发布说明（放 docs/releases/ 下随代码版本管理）、
+# --skip-build 只重传不重建、--notes-only 只改说明不碰构建与附件
 ```
 
-访问令牌在 <https://cnb.cool/profile/token/create> 创建，**授权范围必须包含 `repo-release:rw`**。
+CNB 访问令牌在 <https://cnb.cool/profile/token/create> 创建，**授权范围必须包含 `repo-release:rw`**。
 注意 `cnb login` 拿到的 OAuth 令牌不带这个权限，只能用访问令牌。
+
+`publish_github.sh` 会先推代码；如果所在网络把 `github.com` 的 git 协议挡了，它会自动退回
+`tool/push_github_api.py`，用 REST API（blob → tree → commit → ref）重放本地历史，
+算出的提交 SHA 与本地完全一致。
 
 附件上传是标准三步（脚本已封装）：取 COS 预签名地址 → `PUT` 直传对象存储 → 回调 `verify_url` 确认。
 少了最后一步，附件会停在「传上去了但看不到」的状态。
@@ -250,6 +253,8 @@ lib/
 tool/
 ├── verify.dart                  # 纯 Dart 自检（59 项），CI 可直接跑
 ├── build_release.sh             # 标准发布打包（剥符号 + 产物体检）
+├── publish_github.sh            # 发布到 GitHub Releases（推代码 + 建版本 + 传附件）
+├── push_github_api.py           # 用 REST API 把 git 历史镜像到 GitHub（git 协议不通时用）
 ├── publish_release.sh           # 发布到 CNB Release（打包 + 建版本 + 传附件）
 ├── sftp_smoke.dart              # SFTP 冒烟脚本
 └── gen_logo.py                  # 应用图标生成（纯 Python SDF 抗锯齿）
