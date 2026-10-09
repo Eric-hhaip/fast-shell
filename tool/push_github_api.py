@@ -8,9 +8,14 @@
   提交信息、作者、时间、树结构都保留。
 
 它做的事：
-  1. 从本地 git 读出一条线性的提交历史（必须是非合并的单链）
+  1. 读远端 refs/heads/<branch>：不存在就全量灌入；已存在且是本地历史的祖先，就只补新提交
   2. 逐个提交：为改动文件建 blob，用 base_tree 增量建 tree，建 commit 串成父子链
-  3. 最后把 refs/heads/<branch> 指到最新 commit
+  3. 最后把 refs/heads/<branch> 指到最新 commit（已存在则 PATCH 前移）
+
+  因为 GitHub 对相同 tree/parents/作者/说明算出的 commit sha 与本地 git 完全一致，
+  增量推送只比对 sha 即可，不会产生重复历史。
+
+  安全性：远端历史一旦与本地分叉，脚本直接报错退出，不会覆盖远端。
 
 用法：
   GITHUB_TOKEN=<PAT> tool/push_github_api.py
@@ -26,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime as dt
 import json
 import os
 import subprocess
@@ -57,24 +63,78 @@ def git_text(*args: str) -> str:
     return git(*args).decode("utf-8", "replace")
 
 
-def list_commits() -> list[str]:
-    """按时间正序返回所有提交（不含合并提交的父，必须是单链）。"""
-    out = git_text("rev-list", "--reverse", "HEAD").split()
-    if not out:
-        raise RuntimeError("当前分支没有任何提交")
+def list_commits(base: str | None = None) -> list[str]:
+    """按时间正序返回要推送的提交。
+
+    base 为 None 时是整条历史；否则只返回 base 之后的新提交。
+    要求是单链（合并提交会让父指针不唯一）。
+    """
+    rev = f"{base}..HEAD" if base else "HEAD"
+    out = git_text("rev-list", "--reverse", rev).split()
     return out
 
 
+def is_ancestor(sha: str, descendant: str) -> bool:
+    """sha 是否是 descendant 的祖先（用来判断远端是不是本地历史的一段）。"""
+    r = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", sha, descendant],
+        cwd=ROOT, capture_output=True,
+    )
+    return r.returncode == 0
+
+
+def find_local_commit_by_tree(remote_sha: str) -> str | None:
+    """远端提交的哈希在本地不存在时，按 tree 找出对应的本地提交。
+
+    什么时候会走到这：别处用 API 推过同一个提交、但消息末尾多了个空行，
+    内容一样、哈希不一样。这时远端 tip 不是本地祖先，直接判分叉会误伤。
+    按 tree 对齐（取最新的匹配）就能接着往下推。
+    """
+    code, body = api("GET", f"/repos/{REPO}/git/commits/{remote_sha}")
+    if code != 200:
+        return None
+    want = body["tree"]["sha"]
+    for line in git_text("log", "--format=%H %T", "HEAD").splitlines():
+        sha, _, tree = line.partition(" ")
+        if tree.strip() == want:
+            return sha
+    return None
+
+
+def parse_ident(text: str) -> dict:
+    """把 'Name <email> 1791556981 +0800' 拆成 API 要的 {name, email, date}。"""
+    lt = text.rfind("<")
+    gt = text.rfind(">")
+    name = text[:lt].strip()
+    email = text[lt + 1:gt]
+    parts = text[gt + 1:].split()
+    epoch = int(parts[0])
+    tz = parts[1] if len(parts) > 1 else "+0000"
+    sign = -1 if tz.startswith("-") else 1
+    offset = dt.timedelta(hours=int(tz[1:3]), minutes=int(tz[3:5])) * sign
+    when = dt.datetime.fromtimestamp(epoch, dt.timezone(offset))
+    return {"name": name, "email": email, "date": when.isoformat()}
+
+
 def commit_meta(sha: str) -> dict:
-    """取提交的说明、作者与提交者（含时间）。"""
-    fmt = "%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%B"
-    raw = git_text("log", "-1", f"--format={fmt}", sha)
-    an, ae, ad, cn, ce, cd, msg = raw.split("\x00", 6)
-    return {
-        "message": msg,
-        "author": {"name": an, "email": ae, "date": ad},
-        "committer": {"name": cn, "email": ce, "date": cd},
-    }
+    """取提交的说明、作者与提交者（含时间）。
+
+    这里直接读 commit 对象的原文并切开 header / message。
+    别偷懒用 `git log --format=%B`：git 会在每条输出后补一个换行，
+    说明末尾就多出一个空行，算出来的 commit SHA 和本地对不上
+    （GitHub 是原样保存 message 的，多一个字符就是另一个提交）。
+    """
+    raw = git_text("cat-file", "commit", sha)
+    headers, _, message = raw.partition("\n\n")
+    found: dict = {}
+    for line in headers.splitlines():
+        if line.startswith("author "):
+            found["author"] = parse_ident(line[len("author "):])
+        elif line.startswith("committer "):
+            found["committer"] = parse_ident(line[len("committer "):])
+    if "author" not in found or "committer" not in found:
+        raise RuntimeError(f"提交 {sha[:7]} 的对象缺少作者信息")
+    return {"message": message, "author": found["author"], "committer": found["committer"]}
 
 
 def changed_files(sha: str) -> list[tuple[str, str]]:
@@ -169,26 +229,64 @@ def main() -> int:
         first_line = meta["message"].strip().splitlines()[0] if meta["message"].strip() else ""
         print(f"    {short}  {len(files):3d} 个文件改动  {first_line}")
 
-    if args.dry_run:
-        print("\n==> --dry-run：到此为止，未调用任何 API")
-        return 0
-
     if not TOKEN:
         print("缺少 GITHUB_TOKEN。", file=sys.stderr)
         print("请到 https://github.com/settings/tokens 创建 PAT（需要 Contents: Read and write），然后：", file=sys.stderr)
         print(f"  GITHUB_TOKEN=xxx tool/push_github_api.py", file=sys.stderr)
         return 1
 
-    # 目标分支已存在时不动它 —— 覆盖远端历史是危险动作，交给用户用 git push 处理
-    code, body = api("GET", f"/repos/{REPO}/git/ref/heads/{args.branch}")
-    if code == 200:
-        current = body.get("object", {}).get("sha", "?")
-        print(f"==> 分支 {args.branch} 已存在（{current[:7]}）")
-        print("    本脚本只用于灌入空仓库。已有分支请改用 git push，或先确认可以覆盖。", file=sys.stderr)
-        return 1
-    print(f"==> 分支 {args.branch} 尚不存在，开始灌入")
+    local_head = git_text("rev-parse", "HEAD").strip()
 
-    prev_commit_sha: str | None = None
+    # 远端分支已存在时做增量：只要远端 tip 是本地历史的祖先，就把之后的提交补上去。
+    # （GitHub 对相同 tree/parents/作者/说明算出的 commit sha 与 git 一致，所以能直接比对。）
+    remote_sha: str | None = None
+    push_base: str | None = None
+    if args.dry_run:
+        print("==> --dry-run：不查远端，按全量历史展示")
+    else:
+        code, body = api("GET", f"/repos/{REPO}/git/ref/heads/{args.branch}")
+        if code == 200:
+            remote_sha = body["object"]["sha"]
+            push_base = remote_sha
+            print(f"==> 分支 {args.branch} 已存在（{remote_sha[:7]}）")
+            if remote_sha == local_head:
+                print("    远端已经是最新，无需推送")
+                return 0
+            if not is_ancestor(remote_sha, local_head):
+                # 哈希对不上但内容可能一致（例如别处用 API 推过、说明末尾多个空行）
+                aligned = find_local_commit_by_tree(remote_sha)
+                if aligned is None:
+                    print(f"远端 {args.branch} 指向 {remote_sha[:7]}，在本地找不到对应提交。", file=sys.stderr)
+                    print("两边历史已经分叉，请先人工处理（本脚本不会覆盖远端历史）。", file=sys.stderr)
+                    return 1
+                push_base = aligned
+                print(f"    远端 tip 哈希与本地不一致（内容相同），按 tree 对齐到本地 {aligned[:7]}")
+        else:
+            print(f"==> 分支 {args.branch} 尚不存在，全量灌入")
+
+    commits = list_commits(push_base)
+    if not commits:
+        print("==> 没有需要推送的提交")
+        return 0
+    print(f"==> 待推送 {len(commits)} 个提交")
+
+    # 先读一遍本地历史，顺带校验是单链（合并提交会让父指针不唯一）
+    specs = []
+    for sha in commits:
+        parents = git_text("rev-list", "--parents", "-n", "1", sha).split()[1:]
+        if len(parents) > 1:
+            raise RuntimeError(f"{sha[:7]} 是合并提交，本脚本只支持单链历史")
+        meta = commit_meta(sha)
+        files = changed_files(sha)
+        specs.append({"sha": sha, "parents": parents, "meta": meta, "files": files})
+        first_line = meta["message"].strip().splitlines()[0] if meta["message"].strip() else ""
+        print(f"    {sha[:7]}  {len(files):3d} 个文件改动  {first_line}")
+
+    if args.dry_run:
+        print("\n==> --dry-run：到此为止，未调用任何 API")
+        return 0
+
+    prev_commit_sha: str | None = remote_sha
 
     for i, spec in enumerate(specs, 1):
         short = spec["sha"][:7]
@@ -232,11 +330,19 @@ def main() -> int:
         prev_commit_sha = new_commit["sha"]
         print(f"    → {prev_commit_sha[:7]}  {len(entries)} 个树节点")
 
-    print(f"==> 创建分支 {args.branch}")
-    api_ok("POST", f"/repos/{REPO}/git/refs", {
-        "ref": f"refs/heads/{args.branch}",
-        "sha": prev_commit_sha,
-    })
+    if remote_sha is None:
+        print(f"==> 创建分支 {args.branch}")
+        api_ok("POST", f"/repos/{REPO}/git/refs", {
+            "ref": f"refs/heads/{args.branch}",
+            "sha": prev_commit_sha,
+        })
+    else:
+        print(f"==> 移动分支 {args.branch}：{remote_sha[:7]} → {prev_commit_sha[:7]}")
+        # force=false：万一远端在我们操作期间又动了，让 API 报错而不是悄悄覆盖
+        api_ok("PATCH", f"/repos/{REPO}/git/refs/heads/{args.branch}", {
+            "sha": prev_commit_sha,
+            "force": False,
+        })
 
     print()
     print("==> 完成")
