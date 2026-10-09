@@ -187,6 +187,8 @@ CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0
 CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0 --notes docs/releases/v1.1.0.md
 # 只重新上传、不重新构建：
 CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0 --skip-build
+# 只改版本说明，不碰构建与附件（附件几十 MB，没必要重传）：
+CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0 --notes-only --notes docs/releases/v1.1.0.md
 ```
 
 访问令牌在 <https://cnb.cool/profile/token/create> 创建，**授权范围必须包含 `repo-release:rw`**。

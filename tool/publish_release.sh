@@ -18,6 +18,7 @@
 #   CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.0.0
 #   CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0 --skip-build
 #   CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0 --notes docs/releases/v1.1.0.md
+#   CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.0.0 --notes-only --notes docs/releases/v1.0.0.md
 #
 # 令牌从哪来（重要）：
 #   https://cnb.cool/profile/token/create
@@ -47,10 +48,13 @@ VERSION=""
 SKIP_BUILD=0
 NOTES=""
 PRERELEASE=0
+# 只更新版本说明：不动标签、不构建、不重传附件
+NOTES_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
+    --notes-only) NOTES_ONLY=1; shift ;;
     --notes)      NOTES="${2:-}"; shift 2 ;;
     --prerelease) PRERELEASE=1; shift ;;
     -h|--help)    sed -n '2,30p' "$0" | sed 's/^#\{1,\} \{0,1\}//'; exit 0 ;;
@@ -73,6 +77,10 @@ if [[ -z "${CNB_TOKEN:-}" ]]; then
   echo "缺少 CNB_TOKEN。" >&2
   echo "请到 https://cnb.cool/profile/token/create 创建访问令牌（授权范围需含 repo-release:rw），然后：" >&2
   echo "  CNB_TOKEN=xxx tool/publish_release.sh $VERSION" >&2
+  exit 1
+fi
+if [[ "$NOTES_ONLY" == "1" && -z "$NOTES" ]]; then
+  echo "--notes-only 需要同时用 --notes 指定说明文件（否则没有可更新的内容）" >&2
   exit 1
 fi
 
@@ -101,34 +109,38 @@ fi
 
 # ---------------------------------------------------------------- 2. 构建与打包
 
-if [[ "$SKIP_BUILD" == "0" ]]; then
-  FLUTTER_BIN="${FLUTTER_BIN:-$(command -v flutter || echo "$HOME/Work/develop/flutter/bin/flutter")}"
-  if [[ ! -x "$FLUTTER_BIN" ]]; then
-    echo "找不到 flutter，请设置 FLUTTER_BIN=/path/to/flutter" >&2
+if [[ "$NOTES_ONLY" == "1" ]]; then
+  echo "==> 仅更新版本说明（--notes-only：不动构建与附件）"
+else
+  if [[ "$SKIP_BUILD" == "0" ]]; then
+    FLUTTER_BIN="${FLUTTER_BIN:-$(command -v flutter || echo "$HOME/Work/develop/flutter/bin/flutter")}"
+    if [[ ! -x "$FLUTTER_BIN" ]]; then
+      echo "找不到 flutter，请设置 FLUTTER_BIN=/path/to/flutter" >&2
+      exit 1
+    fi
+    echo "==> 构建 release"
+    "$FLUTTER_BIN" build macos --release
+  else
+    echo "==> 跳过构建（--skip-build）"
+  fi
+
+  if [[ ! -d "$APP" ]]; then
+    echo "产物不存在：$APP" >&2
     exit 1
   fi
-  echo "==> 构建 release"
-  "$FLUTTER_BIN" build macos --release
-else
-  echo "==> 跳过构建（--skip-build）"
+
+  echo "==> 打包 zip"
+  mkdir -p "$DIST"
+  rm -f "$ZIP"
+  # --keepParent 保证解压后拿到的是完整的 Fast Shell.app；
+  # 不加 --sequesterRsrc，避免塞进没用的 __MACOSX 目录
+  ditto -c -k --keepParent "$APP" "$ZIP"
+
+  SIZE="$(stat -f%z "$ZIP")"
+  SHA="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
+  echo "    $ASSET  $((SIZE / 1024 / 1024)) MB"
+  echo "    sha256 $SHA"
 fi
-
-if [[ ! -d "$APP" ]]; then
-  echo "产物不存在：$APP" >&2
-  exit 1
-fi
-
-echo "==> 打包 zip"
-mkdir -p "$DIST"
-rm -f "$ZIP"
-# --keepParent 保证解压后拿到的是完整的 Fast Shell.app；
-# 不加 --sequesterRsrc，避免塞进没用的 __MACOSX 目录
-ditto -c -k --keepParent "$APP" "$ZIP"
-
-SIZE="$(stat -f%z "$ZIP")"
-SHA="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
-echo "    $ASSET  $((SIZE / 1024 / 1024)) MB"
-echo "    sha256 $SHA"
 
 # ---------------------------------------------------------------- API 小工具
 
@@ -221,6 +233,13 @@ print(json.dumps({
     echo "$BODY" >&2
     exit 1
   fi
+fi
+
+if [[ "$NOTES_ONLY" == "1" ]]; then
+  echo
+  echo "==> 完成（附件未改动）"
+  echo "版本页：  https://cnb.cool/${CNB_REPO}/-/releases/tag/${TAG}"
+  exit 0
 fi
 
 # ---------------------------------------------------------------- 4. 取上传地址并直传
