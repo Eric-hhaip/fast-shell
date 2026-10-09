@@ -10,6 +10,21 @@
 
 ---
 
+## 下载安装
+
+到 [版本发布页](https://cnb.cool/hhaip.com/opensource/fast-shell/-/releases) 下载最新版的
+`Fast-Shell-<版本>-macos.zip`，解压后把 `Fast Shell.app` 拖进「应用程序」。
+
+首次打开若被 Gatekeeper 拦下（本地自签名、未经过 Apple 公证）：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Fast Shell.app"
+```
+
+> 系统要求 macOS 12+，Apple Silicon / Intel 均可。
+
+---
+
 ## 为什么做这个
 
 日常运维往往要在「终端工具 + 文件传输工具 + 一个 ssh 进去敲 `top` 的窗口」之间来回切。
