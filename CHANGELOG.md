@@ -20,6 +20,7 @@
 - **纯 Dart 自检**：`tool/verify.dart`（59 项用例），无需 GUI 环境
 - **发布打包脚本**：`tool/build_release.sh`（剥符号 + 产物体检）
 - **版本发布脚本**：`tool/publish_release.sh`（一键发布到 CNB Release，含附件上传与确认）
+- **GitHub 发布脚本**：`tool/publish_github.sh`（一键发布到 GitHub Release）+ `tool/push_github_api.py`（git 协议不通时改走 REST API 镜像历史）
 
 ### 性能
 
