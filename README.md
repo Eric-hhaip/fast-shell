@@ -149,6 +149,25 @@ Flutter 3.47 起 macOS 默认使用 **Impeller** 渲染后端，本项目在其�
 > 因此在沙盒里，把文件写进用户通过面板选择的目录有时会被系统拒绝。
 > 这就是下载默认落地 `~/Downloads`、自选位置前先做一次写入探测的原因。
 
+### 发布新版本
+
+安装包通过 **CNB Release** 分发（与 GitHub Releases 等价，支持指定版本号与附件下载）。
+一条命令完成「打标签 → 构建 → 打包 → 建版本 → 传附件 → 确认」：
+
+```bash
+CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0
+# 指定发布说明（放 docs/releases/ 下随代码一起版本管理）：
+CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0 --notes docs/releases/v1.1.0.md
+# 只重新上传、不重新构建：
+CNB_TOKEN=<访问令牌> tool/publish_release.sh 1.1.0 --skip-build
+```
+
+访问令牌在 <https://cnb.cool/profile/token/create> 创建，**授权范围必须包含 `repo-release:rw`**。
+注意 `cnb login` 拿到的 OAuth 令牌不带这个权限，只能用访问令牌。
+
+附件上传是标准三步（脚本已封装）：取 COS 预签名地址 → `PUT` 直传对象存储 → 回调 `verify_url` 确认。
+少了最后一步，附件会停在「传上去了但看不到」的状态。
+
 ---
 
 ## 数据存放位置
@@ -197,6 +216,7 @@ lib/
 tool/
 ├── verify.dart                  # 纯 Dart 自检（59 项），CI 可直接跑
 ├── build_release.sh             # 标准发布打包（剥符号 + 产物体检）
+├── publish_release.sh           # 发布到 CNB Release（打包 + 建版本 + 传附件）
 ├── sftp_smoke.dart              # SFTP 冒烟脚本
 └── gen_logo.py                  # 应用图标生成（纯 Python SDF 抗锯齿）
 ```
