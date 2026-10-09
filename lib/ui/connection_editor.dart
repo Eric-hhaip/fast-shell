@@ -201,24 +201,26 @@ class _ConnectionEditorDialogState extends State<ConnectionEditorDialog> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    flex: 3,
-                    child: _field(
-                      label: '连接名称',
-                      hint: '(可选)',
-                      controller: _name,
-                      hintText: '例如：生产环境 Web',
+              // IntrinsicHeight + stretch：让「分类」框与「连接名称」输入框强制同高。
+              // 两边高度来源不同（TextField 走 InputDecorator，分类是自绘容器），
+              // 与其各自硬编码高度，不如让矮的一边直接撑齐。
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: _field(
+                        label: '连接名称',
+                        hint: '(可选)',
+                        controller: _name,
+                        hintText: '例如：生产环境 Web',
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    flex: 2,
-                    child: _categoryField(),
-                  ),
-                ],
+                    const SizedBox(width: 12),
+                    Expanded(flex: 2, child: _categoryField()),
+                  ],
+                ),
               ),
               const SizedBox(height: 14),
               Row(
@@ -323,8 +325,9 @@ class _ConnectionEditorDialogState extends State<ConnectionEditorDialog> {
                         ? Icons.visibility_outlined
                         : Icons.visibility_off_outlined,
                     tooltip: _obscurePassphrase ? '显示' : '隐藏',
-                    onPressed: () =>
-                        setState(() => _obscurePassphrase = !_obscurePassphrase),
+                    onPressed: () => setState(
+                      () => _obscurePassphrase = !_obscurePassphrase,
+                    ),
                   ),
                 ),
               ],
@@ -512,102 +515,109 @@ class _ConnectionEditorDialogState extends State<ConnectionEditorDialog> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const FieldLabel(text: '分类'),
-        Row(
-          children: [
-            Expanded(
-              // LayoutBuilder 取字段实际宽度，让弹出菜单与字段等宽
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  return PopupMenuButton<String>(
-                    key: _menuKey,
-                    constraints: BoxConstraints.tightFor(
-                      width: constraints.maxWidth,
-                    ),
-                    initialValue: value,
-                    position: PopupMenuPosition.under,
-                    offset: const Offset(0, 4),
-                    color: Colors.white,
-                    elevation: 8,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      side: const BorderSide(color: AppColors.borderSoft),
-                    ),
-                    onSelected: (next) => setState(() => _group.text = next),
-                    // menuContext 指向菜单所在的 Overlay 路由，仅用于关闭菜单本身
-                    itemBuilder: (menuContext) => [
-                      for (final name in _categories)
-                        PopupMenuItem(
-                          value: name,
-                          height: 34,
-                          padding: const EdgeInsets.only(left: 12, right: 4),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Text(name, style: AppText.body),
-                              ),
-                              // 「默认」是内置分类，不给删除入口
-                              if (!_builtinCategories.contains(name))
-                                IconButton(
-                                  icon: const Icon(
-                                    Icons.delete_outline,
-                                    size: 15,
-                                  ),
-                                  color: AppColors.textTertiary,
-                                  tooltip: '删除分类',
-                                  splashRadius: 14,
-                                  visualDensity: VisualDensity.compact,
-                                  constraints: const BoxConstraints(
-                                    minWidth: 26,
-                                    minHeight: 26,
-                                  ),
-                                  padding: EdgeInsets.zero,
-                                  // 子按钮自己吃掉点击，不会触发选中
-                                  onPressed: () {
-                                    // 菜单项是在「打开菜单那一刻」一次性构建的，
-                                    // 之后对编辑器 setState 不会重建这层已打开的路由，
-                                    // 删掉的项会一直挂在菜单里 —— 所以先关掉菜单，
-                                    // 删完再把它重新弹出来（见 _deleteCategory）。
-                                    Navigator.of(menuContext).pop();
-                                    unawaited(_deleteCategory(name));
-                                  },
-                                ),
-                            ],
-                          ),
-                        ),
-                    ],
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 10,
+        // 外层 Row 用了 IntrinsicHeight + stretch（见 build 里「连接名称 / 分类」一行），
+        // 这里必须撑满剩余高度，下拉框才能和「连接名称」输入框一样高。
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                // LayoutBuilder 取字段实际宽度，让弹出菜单与字段等宽
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    return PopupMenuButton<String>(
+                      key: _menuKey,
+                      constraints: BoxConstraints.tightFor(
+                        width: constraints.maxWidth,
                       ),
-                      decoration: BoxDecoration(
-                        color: AppColors.canvas,
+                      initialValue: value,
+                      position: PopupMenuPosition.under,
+                      offset: const Offset(0, 4),
+                      color: Colors.white,
+                      elevation: 8,
+                      shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: AppColors.border),
+                        side: const BorderSide(color: AppColors.borderSoft),
                       ),
-                      child: Row(
-                        children: [
-                          Expanded(child: Text(value, style: AppText.body)),
-                          const Icon(
-                            Icons.keyboard_arrow_down,
-                            size: 16,
-                            color: AppColors.textTertiary,
+                      onSelected: (next) => setState(() => _group.text = next),
+                      // menuContext 指向菜单所在的 Overlay 路由，仅用于关闭菜单本身
+                      itemBuilder: (menuContext) => [
+                        for (final name in _categories)
+                          PopupMenuItem(
+                            value: name,
+                            height: 34,
+                            padding: const EdgeInsets.only(left: 12, right: 4),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(name, style: AppText.body),
+                                ),
+                                // 「默认」是内置分类，不给删除入口
+                                if (!_builtinCategories.contains(name))
+                                  IconButton(
+                                    icon: const Icon(
+                                      Icons.delete_outline,
+                                      size: 15,
+                                    ),
+                                    color: AppColors.textTertiary,
+                                    tooltip: '删除分类',
+                                    splashRadius: 14,
+                                    visualDensity: VisualDensity.compact,
+                                    constraints: const BoxConstraints(
+                                      minWidth: 26,
+                                      minHeight: 26,
+                                    ),
+                                    padding: EdgeInsets.zero,
+                                    // 子按钮自己吃掉点击，不会触发选中
+                                    onPressed: () {
+                                      // 菜单项是在「打开菜单那一刻」一次性构建的，
+                                      // 之后对编辑器 setState 不会重建这层已打开的路由，
+                                      // 删掉的项会一直挂在菜单里 —— 所以先关掉菜单，
+                                      // 删完再把它重新弹出来（见 _deleteCategory）。
+                                      Navigator.of(menuContext).pop();
+                                      unawaited(_deleteCategory(name));
+                                    },
+                                  ),
+                              ],
+                            ),
                           ),
-                        ],
+                      ],
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.canvas,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppColors.border),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(child: Text(value, style: AppText.body)),
+                            const Icon(
+                              Icons.keyboard_arrow_down,
+                              size: 16,
+                              color: AppColors.textTertiary,
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  );
-                },
+                    );
+                  },
+                ),
               ),
-            ),
-          const SizedBox(width: 8),
-          AppIconButton(
-            icon: Icons.add,
-            tooltip: '新增分类',
-            size: 34,
-            onPressed: _addCategory,
+              const SizedBox(width: 8),
+              Center(
+                child: AppIconButton(
+                  icon: Icons.add,
+                  tooltip: '新增分类',
+                  size: 34,
+                  onPressed: _addCategory,
+                ),
+              ),
+            ],
           ),
-        ],
         ),
       ],
     );
@@ -671,7 +681,8 @@ class _ConnectionEditorDialogState extends State<ConnectionEditorDialog> {
     String? hintText,
     bool obscure = false,
     Widget? suffix,
-  }) {    return Column(
+  }) {
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         FieldLabel(text: label, hint: hint),
